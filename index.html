@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>GPS Log</title>
 <style>
 :root{--bg:#f3f5f1;--surface:#fff;--ink:#16221b;--muted:#5d6b62;--line:#d9dfd8;--accent:#1f6f4a;--accent-ink:#fff;--warn:#a23b2a;--soft:#e4efe8;
@@ -49,7 +49,7 @@ textarea{width:100%;height:140px;margin-top:10px;border:1px solid var(--line);bo
 #plot .edge.man{stroke-dasharray:6 4}
 #plot .ehit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
 #plot .lbl{text-anchor:start;font-size:10.5px;paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round;pointer-events:none}
-.plotbox{position:relative}
+.plotbox{position:relative;touch-action:none}
 .tools{position:absolute;top:8px;left:8px;display:flex;gap:6px;z-index:2}
 .tools button{flex:none;padding:6px 9px;font-size:.78rem;border-radius:8px;background:var(--surface)}
 .tools button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -90,6 +90,8 @@ tr.hd td{background:var(--soft);font-weight:700}
 tr.rm td{opacity:.4;text-decoration:line-through}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .chips button{flex:none;padding:6px 12px;border-radius:999px;font-size:.85rem}
+.grid2 select{width:100%}
+button.stop{border-color:var(--warn);color:var(--warn);font-weight:650}
 /* menu */
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom,0px);z-index:5}
 nav button{border:0;border-radius:0;background:none;padding:14px 2px;color:var(--muted);font-weight:600;font-size:.8rem}
@@ -109,7 +111,14 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     <datalist id="lbl-list"></datalist>
     <div class="chips" id="chips"></div>
     <div class="meta" id="nxt"></div>
-    <div class="row"><button class="primary" id="save" disabled>Save location</button></div>
+    <div class="row"><button class="primary" id="save" disabled>Save location</button><button id="route">Save route</button></div>
+    <div id="rt-panel" style="display:none;margin-top:12px">
+      <label for="rt-n">Log a point every</label>
+      <div class="grid2"><input type="number" id="rt-n" min="1" step="1" inputmode="decimal"><select id="rt-u" aria-label="Unit"><option value="s">seconds</option><option value="m">minutes</option></select></div>
+      <div class="meta">Each point uses the label above and adds the next number. Keep this page open and the screen on while logging.</div>
+      <div class="row"><button class="primary" id="rt-go">Start logging</button><button id="rt-cancel">Cancel</button></div>
+    </div>
+    <div class="status" id="rt-msg" aria-live="polite"></div>
   </div>
   <h2>Saved locations <span id="count" style="color:var(--muted);font-weight:400"></span></h2>
   <ul id="list"></ul>
@@ -555,6 +564,10 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
   $("z-in").onclick=function(){zoomAt(180,180,V.k*1.5);drawPlot()};
   $("z-out").onclick=function(){zoomAt(180,180,V.k/1.5);drawPlot()};
   $("z-fit").onclick=function(){V={k:1,x:0,y:0};drawPlot()};
+  var pb=sv.parentNode||sv;
+  pb.addEventListener("touchstart",function(e){if(e.touches&&e.touches.length>1)e.preventDefault()},{passive:false});
+  pb.addEventListener("touchmove",function(e){e.preventDefault()},{passive:false});
+  ["gesturestart","gesturechange","gestureend"].forEach(function(t){pb.addEventListener(t,function(e){e.preventDefault()})});
 
   /* menu */
   function show(v){
@@ -787,14 +800,67 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
   };
 
   /* actions */
-  $("save").onclick=function(){
-    if(!fix)return;
+  function savePoint(){
+    if(!fix)return null;
     var v=makeLabel($("note").value);
     entries.push({id:Date.now()+"-"+Math.random().toString(36).slice(2,6),time:new Date().toISOString(),lat:fix.lat,lon:fix.lon,acc:fix.acc,alt:fix.alt,note:v.label});
     persist();rememberLabel(v.base);
     $("note").value=v.base;
-    renderLog();setStatus("Saved"+(v.label?" as "+v.label:"")+".");
+    renderLog();
+    return v;
+  }
+  $("save").onclick=function(){
+    var v=savePoint();if(!v)return;
+    setStatus("Saved"+(v.label?" as "+v.label:"")+".");
     if(S.vib&&navigator.vibrate)navigator.vibrate(40);
+  };
+
+  /* save route: automatic logging at a set frequency */
+  var RKEY="gpslog:route",routeT=0,routeN=0,routeTxt="",wake=null;
+  function loadRoute(){
+    try{var r=JSON.parse(localStorage.getItem(RKEY)||"null");if(r&&r.v>=1&&(r.u==="s"||r.u==="m"))return r}catch(e){}
+    return {v:10,u:"s"};
+  }
+  function lockOn(){try{if(navigator.wakeLock&&navigator.wakeLock.request)navigator.wakeLock.request("screen").then(function(l){wake=l},function(){})}catch(e){}}
+  function lockOff(){try{if(wake){wake.release();wake=null}}catch(e){}}
+  document.addEventListener("visibilitychange",function(){if(routeT&&document.visibilityState==="visible")lockOn()});
+  function routeTick(){
+    var m=$("rt-msg"),v=savePoint();
+    if(v){
+      routeN++;m.className="status";
+      m.textContent="Logging every "+routeTxt+". "+routeN+" point"+(routeN===1?"":"s")+" logged. Keep this page open and the screen on.";
+    }else{
+      m.className="status err";
+      m.textContent="Waiting for a GPS fix before logging. Allow location access.";
+    }
+  }
+  function startRoute(v,u){
+    routeN=0;routeTxt=v+(u==="m"?" min":" s");
+    routeT=setInterval(routeTick,v*(u==="m"?60000:1000));
+    $("route").textContent="Stop logging points";$("route").classList.toggle("stop",true);
+    lockOn();routeTick();
+  }
+  function stopRoute(){
+    clearInterval(routeT);routeT=0;lockOff();
+    $("route").textContent="Save route";$("route").classList.toggle("stop",false);
+    var m=$("rt-msg");m.className="status";
+    m.textContent="Stopped. "+routeN+" point"+(routeN===1?"":"s")+" logged.";
+  }
+  $("route").onclick=function(){
+    if(routeT){stopRoute();return}
+    var r=loadRoute();
+    $("rt-n").value=r.v;$("rt-u").value=r.u;
+    $("rt-msg").textContent="";
+    $("rt-panel").style.display="block";
+    $("rt-n").focus();
+  };
+  $("rt-cancel").onclick=function(){$("rt-panel").style.display="none"};
+  $("rt-go").onclick=function(){
+    var v=parseFloat($("rt-n").value),u=$("rt-u").value;
+    if(!(v>=1)){$("rt-msg").className="status err";$("rt-msg").textContent="Enter a frequency of 1 or more.";return}
+    try{localStorage.setItem(RKEY,JSON.stringify({v:v,u:u}))}catch(e){}
+    $("rt-panel").style.display="none";
+    startRoute(v,u);
   };
   $("copy").onclick=function(){if(!entries.length){setStatus("Nothing to copy yet.",true);return}copyText(csv())};
   /* clear all: in-page two-step confirm (no browser dialog, no GPS needed) */
