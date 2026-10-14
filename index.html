@@ -92,6 +92,10 @@ tr.rm td{opacity:.4;text-decoration:line-through}
 .chips button{flex:none;padding:6px 12px;border-radius:999px;font-size:.85rem}
 .grid2 select{width:100%}
 button.stop{border-color:var(--warn);color:var(--warn);font-weight:650}
+.bar{position:sticky;top:0;z-index:4;background:var(--bg);margin-top:14px;padding:8px 0;box-shadow:0 1px 0 var(--line)}
+.bar h2{margin:0 0 8px}
+.bar>.row{margin-top:0}
+#out{height:90px}
 /* menu */
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom,0px);z-index:5}
 nav button{border:0;border-radius:0;background:none;padding:14px 2px;color:var(--muted);font-weight:600;font-size:.8rem}
@@ -120,8 +124,8 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     </div>
     <div class="status" id="rt-msg" aria-live="polite"></div>
   </div>
-  <h2>Saved locations <span id="count" style="color:var(--muted);font-weight:400"></span></h2>
-  <ul id="list"></ul>
+  <div class="bar">
+    <h2>Saved locations <span id="count" style="color:var(--muted);font-weight:400"></span></h2>
   <div class="row">
     <button id="copy">Copy as CSV</button>
     <button id="savefile">Save file</button>
@@ -135,6 +139,8 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     <div class="status" id="sv-msg"></div>
   </div>
   <div class="status" id="lg-msg" aria-live="polite"></div>
+  </div>
+  <ul id="list"></ul>
 </section>
 
 <section class="view" id="v-plot">
@@ -204,6 +210,10 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
       <select id="s-units"><option value="m">Metres</option><option value="ft">Feet</option></select></div>
     <div class="set"><div>Theme</div>
       <select id="s-theme"><option value="auto">Match phone</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+    <div class="set"><div>Average readings when saving<small>Hold still; GPS readings are averaged for this long</small></div>
+      <select id="s-avg"><option value="0">Off</option><option value="5">5 s</option><option value="10">10 s</option><option value="20">20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></div>
+    <div class="set"><div>Ignore readings worse than<small>Also skips poor points when logging a route</small></div>
+      <select id="s-max"><option value="0">No limit</option><option value="5">5 m</option><option value="10">10 m</option><option value="20">20 m</option><option value="50">50 m</option></select></div>
     <div class="set"><div>High accuracy GPS<small>Uses more battery. Reload to apply.</small></div>
       <input type="checkbox" id="s-hi"></div>
     <div class="set"><div>Vibrate on save</div><input type="checkbox" id="s-vib"></div>
@@ -223,7 +233,7 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
 (function(){
   var KEY="gpslog:v1", SKEY="gpslog:settings";
   var entries=[], fix=null, sel=null;
-  var S={fmt:"dec",units:"m",theme:"auto",hi:true,vib:true,plotLabel:"note"};
+  var S={fmt:"dec",units:"m",theme:"auto",hi:true,vib:true,plotLabel:"note",avg:10,maxAcc:20};
   var $=function(id){return document.getElementById(id)};
 
   function load(){
@@ -261,13 +271,14 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
       fix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,alt:p.coords.altitude};
       $("coords").textContent=fmtPos(fix.lat,fix.lon);
       $("meta").textContent="Accuracy \u00b1"+dist(fix.acc)+(fix.alt!=null?" \u00b7 Altitude "+dist(fix.alt):"");
-      setStatus("Live position. Tap Save to log it.");
+      if(avg)avg.fixes.push({lat:fix.lat,lon:fix.lon,acc:fix.acc,alt:fix.alt});
+      else setStatus("Live position. Tap Save to log it.");
       $("save").disabled=false;
       if($("v-plot").classList.contains("on")&&(!lastDraw||hav(lastDraw,fix)>3))drawPlot();
     },function(err){
       var m={1:"Location is blocked. Allow it in your browser's site settings, then reload.",2:"Position unavailable. Try moving to open sky.",3:"Timed out getting a fix. Still trying\u2026"}[err.code]||"Location error.";
       setStatus(m,true);
-    },{enableHighAccuracy:!!S.hi,maximumAge:2000,timeout:20000});
+    },{enableHighAccuracy:!!S.hi,maximumAge:0,timeout:20000});
   }
 
   /* log list */
@@ -287,7 +298,7 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     if(e.note){var n=document.createElement("div");n.className="n";n.textContent=(withActions?"":idx+". ")+e.note;li.appendChild(n)}
     else if(!withActions){var n2=document.createElement("div");n2.className="n";n2.textContent="Point "+idx;li.appendChild(n2)}
     var c=document.createElement("div");c.className="c";c.textContent=fmtPos(e.lat,e.lon);li.appendChild(c);
-    var t=document.createElement("div");t.className="t";t.textContent=new Date(e.time).toLocaleString()+(e.acc!=null?" \u00b7 \u00b1"+dist(e.acc):"")+(e.src?" \u00b7 "+e.src:"");li.appendChild(t);
+    var t=document.createElement("div");t.className="t";t.textContent=new Date(e.time).toLocaleString()+(e.acc!=null?" \u00b7 \u00b1"+dist(e.acc):"")+(e.n>1?" \u00b7 avg of "+e.n:"")+(e.src?" \u00b7 "+e.src:"");li.appendChild(t);
     if(withActions){
       var a=document.createElement("div");a.className="a";
       var m=document.createElement("button");m.textContent="Open in Maps";m.onclick=function(){window.open(mapsUrl(e),"_blank")};
@@ -597,6 +608,9 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     $("s-theme").onchange=function(){S.theme=this.value;saveS();refresh()};
     $("s-hi").onchange=function(){S.hi=this.checked;saveS()};
     $("s-vib").onchange=function(){S.vib=this.checked;saveS()};
+    $("s-avg").value=String(S.avg);$("s-max").value=String(S.maxAcc);
+    $("s-avg").onchange=function(){S.avg=parseInt(this.value,10);saveS()};
+    $("s-max").onchange=function(){S.maxAcc=parseInt(this.value,10);saveS()};
   }
 
   /* import */
@@ -800,19 +814,61 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
   };
 
   /* actions */
-  function savePoint(){
-    if(!fix)return null;
+  function savePoint(f){
+    var q=f||fix;
+    if(!q)return null;
     var v=makeLabel($("note").value);
-    entries.push({id:Date.now()+"-"+Math.random().toString(36).slice(2,6),time:new Date().toISOString(),lat:fix.lat,lon:fix.lon,acc:fix.acc,alt:fix.alt,note:v.label});
+    var e={id:Date.now()+"-"+Math.random().toString(36).slice(2,6),time:new Date().toISOString(),lat:q.lat,lon:q.lon,acc:q.acc,alt:q.alt,note:v.label};
+    if(q.n>1)e.n=q.n;
+    entries.push(e);
     persist();rememberLabel(v.base);
     $("note").value=v.base;
     renderLog();
     return v;
   }
-  $("save").onclick=function(){
-    var v=savePoint();if(!v)return;
-    setStatus("Saved"+(v.label?" as "+v.label:"")+".");
+
+  /* averaging: hold still and average weighted GPS readings */
+  var avg=null;
+  function avgTick(){
+    if(!avg)return;
+    var left=Math.ceil(S.avg-(Date.now()-avg.t0)/1000);
+    if(left<=0){avgFinish();return}
+    $("save").textContent="Averaging\u2026 "+left+"s";
+    setStatus(avg.fixes.length+" reading"+(avg.fixes.length===1?"":"s")+" so far. Hold still. Tap again to save now.");
+  }
+  function avgFinish(){
+    if(!avg)return;
+    clearInterval(avg.timer);
+    var fs=avg.fixes,lim=S.maxAcc,warn="";
+    avg=null;$("save").textContent="Save location";
+    if(!fs.length){setStatus("No GPS readings received. Try again.",true);return}
+    var use=fs.filter(function(f){return !(lim>0)||f.acc<=lim});
+    if(!use.length){
+      use=[fs.reduce(function(a,b){return b.acc<a.acc?b:a})];
+      warn=" None met the "+lim+" m limit, so the best reading was used.";
+    }
+    var sw=0,la=0,lo=0,al=0,sa=0,best=1e9;
+    use.forEach(function(f){
+      var a=Math.max(f.acc,1),w=1/(a*a);
+      sw+=w;la+=w*f.lat;lo+=w*f.lon;
+      if(f.alt!=null){al+=w*f.alt;sa+=w}
+      if(f.acc<best)best=f.acc;
+    });
+    var v=savePoint({lat:la/sw,lon:lo/sw,acc:best,alt:sa?al/sa:null,n:use.length});
+    setStatus("Saved"+(v.label?" as "+v.label:"")+" (average of "+use.length+" reading"+(use.length===1?"":"s")+", best \u00b1"+dist(best)+")."+warn);
     if(S.vib&&navigator.vibrate)navigator.vibrate(40);
+  }
+  $("save").onclick=function(){
+    if(avg){avgFinish();return}
+    if(!fix)return;
+    if(!(S.avg>0)){
+      var v=savePoint();if(!v)return;
+      setStatus("Saved"+(v.label?" as "+v.label:"")+".");
+      if(S.vib&&navigator.vibrate)navigator.vibrate(40);
+      return;
+    }
+    avg={fixes:[{lat:fix.lat,lon:fix.lon,acc:fix.acc,alt:fix.alt}],t0:Date.now(),timer:setInterval(avgTick,250)};
+    avgTick();
   };
 
   /* save route: automatic logging at a set frequency */
@@ -825,7 +881,13 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
   function lockOff(){try{if(wake){wake.release();wake=null}}catch(e){}}
   document.addEventListener("visibilitychange",function(){if(routeT&&document.visibilityState==="visible")lockOn()});
   function routeTick(){
-    var m=$("rt-msg"),v=savePoint();
+    var m=$("rt-msg");
+    if(fix&&S.maxAcc>0&&fix.acc>S.maxAcc){
+      m.className="status err";
+      m.textContent="Skipped a point: accuracy \u00b1"+Math.round(fix.acc)+" m is worse than the "+S.maxAcc+" m limit. "+routeN+" logged so far.";
+      return;
+    }
+    var v=savePoint();
     if(v){
       routeN++;m.className="status";
       m.textContent="Logging every "+routeTxt+". "+routeN+" point"+(routeN===1?"":"s")+" logged. Keep this page open and the screen on.";
@@ -945,7 +1007,7 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
   /* save file */
   function fileName(){
     var d=new Date(),p=function(n){return n<10?"0"+n:""+n};
-    return "gps-log-"+d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+".csv";
+    return "gps-log-"+d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+".csv";
   }
   function cleanName(n){
     n=String(n||"").trim().replace(/[\\\/:*?"<>|]+/g,"_");
@@ -965,6 +1027,10 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     $("sv-name").focus();
   };
   $("sv-cancel").onclick=function(){$("sv-panel").style.display="none"};
+  function doneSave(t){
+    $("sv-panel").style.display="none";
+    var m=$("lg-msg");m.className="status";m.textContent=t;
+  }
   $("sv-go").onclick=function(){
     var name=cleanName($("sv-name").value),text=csv(),msg=$("sv-msg");
     $("sv-name").value=name;
@@ -974,13 +1040,13 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
         var url=URL.createObjectURL(new Blob([text],{type:"text/csv"})),a=document.createElement("a");
         a.href=url;a.download=name;document.body.appendChild(a);a.click();
         setTimeout(function(){URL.revokeObjectURL(url);if(a.parentNode)a.parentNode.removeChild(a)},1500);
-        ok("Download started: "+name+". Look in your Downloads folder, or use Share to pick another location.");
+        doneSave("Download started: "+name+". Check your Downloads folder.");
       }catch(e){msg.className="status err";msg.textContent="Could not save the file. Use Copy as CSV instead."}
     }
     if(window.showSaveFilePicker){
       window.showSaveFilePicker({suggestedName:name,types:[{description:"CSV file",accept:{"text/csv":[".csv"]}}]})
         .then(function(h){
-          return h.createWritable().then(function(w){return w.write(text).then(function(){return w.close()})}).then(function(){ok("Saved "+h.name+".")});
+          return h.createWritable().then(function(w){return w.write(text).then(function(){return w.close()})}).then(function(){doneSave("Saved "+h.name+".")});
         })
         .catch(function(err){if(err&&err.name==="AbortError")ok("Cancelled.");else dl()});
     }else dl();
@@ -990,7 +1056,7 @@ nav button[aria-current="page"]{color:var(--accent);box-shadow:inset 0 3px 0 var
     $("sv-name").value=name;
     try{
       navigator.share({files:[new File([csv()],name,{type:"text/csv"})],title:name}).then(
-        function(){msg.className="status";msg.textContent="Shared."},
+        function(){doneSave("Shared.")},
         function(err){msg.className="status";msg.textContent=err&&err.name==="AbortError"?"Cancelled.":"Sharing failed. Try Save instead."});
     }catch(e){msg.className="status err";msg.textContent="Sharing is not available here. Use Save instead."}
   };
